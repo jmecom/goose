@@ -5,20 +5,7 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Apply a macOS seatbelt sandbox to the current process by re‑executing
-/// ourselves under `sandbox-exec`.
-#[cfg(target_os = "macos")]
-pub fn apply_sandbox(write_paths: &[PathBuf]) -> Result<()> {
-    // todo remove this
-    println!("apply_sandbox: {:?}", write_paths);
-
-    let _ = write_paths; // TODO: use this
-
-    // Avoid an infinite re‑exec loop if we're already sandboxed.
-    if env::var_os("GOOSE_SANDBOX_APPLIED").is_some() {
-        return Ok(());
-    }
-
+fn build_profile(write_paths: &[PathBuf]) -> Result<String> {
     // Collect the directories that Goose should be allowed to write to.
     // TODO: Figure out how we want to handle failure here.
     let home = env::var("HOME").expect("HOME is not set");
@@ -26,6 +13,18 @@ pub fn apply_sandbox(write_paths: &[PathBuf]) -> Result<()> {
     let goose_state_dir = env::var("GOOSE_STATE_DIR").unwrap_or_else(|_| "/tmp/goose_state".into());
     let goose_config_dir =
         env::var("GOOSE_CONFIG_DIR").unwrap_or_else(|_| "/tmp/goose_config".into());
+
+    let extras: Vec<String> = write_paths
+        .iter()
+        .filter_map(|p| p.canonicalize().ok())
+        .map(|p| p.display().to_string())
+        .collect();
+
+    // Seatbelt requires a separate `(subpath "...")` line for each directory.
+    let extra_rules: String = extras
+        .iter()
+        .map(|p| format!("    (subpath \"{p}\")\n"))
+        .collect();
 
     // Build the seatbelt profile.
     let profile = format!(
@@ -40,12 +39,30 @@ pub fn apply_sandbox(write_paths: &[PathBuf]) -> Result<()> {
     (subpath "{local}")
     (subpath "{state}")
     (subpath "{config}")
+{extra_rules}
 )
 "#,
         local = goose_local_dir,
         state = goose_state_dir,
         config = goose_config_dir,
+        extra_rules = extra_rules,
     );
+
+    println!("profile: {}", profile);
+
+    Ok(profile)
+}
+
+/// Apply a macOS seatbelt sandbox to the current process by re‑executing
+/// ourselves under `sandbox-exec`.
+#[cfg(target_os = "macos")]
+pub fn apply_sandbox(write_paths: &[PathBuf]) -> Result<()> {
+    // Avoid an infinite re‑exec loop if we're already sandboxed.
+    if env::var_os("GOOSE_SANDBOX_APPLIED").is_some() {
+        return Ok(());
+    }
+
+    let profile = build_profile(write_paths)?;
 
     // Persist the profile to a temporary file so we can point sandbox‑exec at it.
     let mut tmp = tempfile::NamedTempFile::new().context("creating temporary sandbox profile")?;
