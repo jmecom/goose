@@ -20,13 +20,8 @@ pub fn apply_sandbox(write_paths: &[PathBuf]) -> Result<()> {
     }
 
     // Collect the directories that Goose should be allowed to write to.
-    // Fallbacks are chosen so the program keeps working even if the caller
-    // hasn't set the env‑vars.
-    let target_dir = env::var("TARGET_DIR")
-        .ok()
-        .unwrap_or_else(|| env::current_dir().unwrap().to_string_lossy().into_owned());
-
-    let home = env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    // TODO: Figure out how we want to handle failure here.
+    let home = env::var("HOME").expect("HOME is not set");
     let goose_local_dir = env::var("GOOSE_LOCAL_DIR").unwrap_or_else(|_| format!("{home}/.goose"));
     let goose_state_dir = env::var("GOOSE_STATE_DIR").unwrap_or_else(|_| "/tmp/goose_state".into());
     let goose_config_dir =
@@ -42,13 +37,11 @@ pub fn apply_sandbox(write_paths: &[PathBuf]) -> Result<()> {
 
 ;; ...but allow them under explicit subpaths...
 (allow file-write*
-    (subpath "{target}")
     (subpath "{local}")
     (subpath "{state}")
     (subpath "{config}")
 )
 "#,
-        target = target_dir,
         local = goose_local_dir,
         state = goose_state_dir,
         config = goose_config_dir,
