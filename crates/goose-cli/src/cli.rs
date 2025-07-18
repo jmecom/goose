@@ -19,6 +19,7 @@ use crate::commands::session::{handle_session_list, handle_session_remove};
 use crate::logging::setup_logging;
 use crate::recipes::extract_from_cli::extract_recipe_info_from_cli;
 use crate::recipes::recipe::{explain_recipe, render_recipe_as_yaml};
+use crate::sandbox::apply_sandbox;
 use crate::session;
 use crate::session::{build_session, SessionBuilderConfig, SessionSettings};
 use goose_bench::bench_config::BenchRunConfig;
@@ -34,6 +35,10 @@ use std::path::PathBuf;
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
+
+    /// Run Goose inside a restrictive macOS sandbox
+    #[arg(long, help = "Re-exec under sandbox-exec (macOS only)")]
+    sandbox: bool,
 }
 
 #[derive(Args, Debug)]
@@ -685,8 +690,46 @@ pub struct InputConfig {
     pub additional_system_prompt: Option<String>,
 }
 
+fn gather_write_paths(cli: &Cli) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::<PathBuf>::new();
+
+    // Always allow the cwd.
+    paths.push(std::env::current_dir()?);
+
+    // Goose's own directories
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("cannot find $HOME"))?;
+    paths.push(home.join(".goose"));
+    paths.push(std::env::temp_dir().join("goose_state"));
+    paths.push(std::env::temp_dir().join("goose_config"));
+
+    // Scan sub-commands for user-supplied paths that imply writes.
+    if let Some(Command::Run {
+        output: Some(p), ..
+    })
+    | Some(Command::Session {
+        command: Some(SessionCommand::Export {
+            output: Some(p), ..
+        }),
+        ..
+    }) = &cli.command
+    {
+        paths.push(p.parent().unwrap_or(p).to_path_buf());
+    }
+
+    // De-duplicate
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
 pub async fn cli() -> Result<()> {
     let cli = Cli::parse();
+
+    if cfg!(target_os = "macos") && cli.sandbox {
+        // Collect the write locations we'll allow and then re-exec ourselves
+        let write_paths = gather_write_paths(&cli)?;
+        apply_sandbox(write_paths)?;
+    }
 
     // Track the current directory in projects.json
     if let Err(e) = crate::project_tracker::update_project_tracker(None, None) {
