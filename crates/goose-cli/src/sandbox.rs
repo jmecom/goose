@@ -9,6 +9,9 @@ use std::process::Command;
 /// ourselves under `sandbox-exec`.
 #[cfg(target_os = "macos")]
 pub fn apply_sandbox(write_paths: &[PathBuf]) -> Result<()> {
+    // todo remove this
+    println!("apply_sandbox: {:?}", write_paths);
+
     let _ = write_paths; // TODO: use this
 
     // Avoid an infinite re‑exec loop if we're already sandboxed.
@@ -69,11 +72,5 @@ pub fn apply_sandbox(write_paths: &[PathBuf]) -> Result<()> {
 
     // `exec` only returns if it fails. Convert that error into anyhow::Error so
     // the caller can handle it in the usual way.
-    cmd.exec();
-}
-
-/// Non‑macOS platforms: do nothing.
-#[cfg(not(target_os = "macos"))]
-fn apply_sandbox() -> Result<()> {
-    Ok(())
+    Err(cmd.exec().into())
 }

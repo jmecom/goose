@@ -697,16 +697,13 @@ fn gather_write_paths(cli: &Cli) -> Result<Vec<PathBuf>> {
     paths.push(std::env::current_dir()?);
 
     // Goose's own directories
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("cannot find $HOME"))?;
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("cannot find $HOME"))?;
     paths.push(home.join(".goose"));
     paths.push(std::env::temp_dir().join("goose_state"));
     paths.push(std::env::temp_dir().join("goose_config"));
 
     // Scan sub-commands for user-supplied paths that imply writes.
-    if let Some(Command::Run {
-        output: Some(p), ..
-    })
-    | Some(Command::Session {
+    if let Some(Command::Session {
         command: Some(SessionCommand::Export {
             output: Some(p), ..
         }),
@@ -728,7 +725,7 @@ pub async fn cli() -> Result<()> {
     if cfg!(target_os = "macos") && cli.sandbox {
         // Collect the write locations we'll allow and then re-exec ourselves
         let write_paths = gather_write_paths(&cli)?;
-        apply_sandbox(write_paths)?;
+        apply_sandbox(&write_paths)?;
     }
 
     // Track the current directory in projects.json
