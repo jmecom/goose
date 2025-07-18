@@ -36,8 +36,7 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
-    /// Run Goose inside a restrictive macOS sandbox
-    #[arg(long, help = "Re-exec under sandbox-exec (macOS only)")]
+    #[arg(long, help = "Run goose in a sandbox (macOS only)")]
     sandbox: bool,
 }
 
@@ -702,7 +701,7 @@ fn gather_write_paths(cli: &Cli) -> Result<Vec<PathBuf>> {
     paths.push(std::env::temp_dir().join("goose_state"));
     paths.push(std::env::temp_dir().join("goose_config"));
 
-    // Scan sub-commands for user-supplied paths that imply writes.
+    // Scan sub-commands for user-supplied paths.
     if let Some(Command::Session {
         command: Some(SessionCommand::Export {
             output: Some(p), ..

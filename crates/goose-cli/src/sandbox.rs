@@ -37,10 +37,10 @@ pub fn apply_sandbox(write_paths: &[PathBuf]) -> Result<()> {
         r#"(version 1)
 (allow default)
 
-;; deny writes everywhere …
+;; deny writes everywhere ...
 (deny file-write*)
 
-;; …but allow them under explicit subpaths
+;; ...but allow them under explicit subpaths...
 (allow file-write*
     (subpath "{target}")
     (subpath "{local}")
