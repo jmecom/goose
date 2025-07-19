@@ -7,12 +7,16 @@ use std::process::Command;
 
 fn build_profile(write_paths: &[PathBuf]) -> Result<String> {
     // Collect the directories that Goose should be allowed to write to.
+
     // TODO: Figure out how we want to handle failure here.
+    // TODO: Figure out all the right paths.
     let home = env::var("HOME").expect("HOME is not set");
-    let goose_local_dir = env::var("GOOSE_LOCAL_DIR").unwrap_or_else(|_| format!("{home}/.goose"));
-    let goose_state_dir = env::var("GOOSE_STATE_DIR").unwrap_or_else(|_| "/tmp/goose_state".into());
-    let goose_config_dir =
-        env::var("GOOSE_CONFIG_DIR").unwrap_or_else(|_| "/tmp/goose_config".into());
+    let goose_local_dir = format!("{home}/.goose");
+    let goose_share_dir = format!("{home}/.local/share/goose");
+    let goose_state_dir_local = format!("{home}/.local/state/goose");
+    let goose_config_home = format!("{home}/.config/goose");
+    let uv_cache_dir = format!("{home}/.cache/uv");
+    let uv_cache_home = format!("{home}/.cache");
 
     let extras: Vec<String> = write_paths
         .iter()
@@ -26,25 +30,33 @@ fn build_profile(write_paths: &[PathBuf]) -> Result<String> {
         .map(|p| format!("    (subpath \"{p}\")\n"))
         .collect();
 
+    // (allow file-read* file-write* file-link file-clone
+
     // Build the seatbelt profile.
     let profile = format!(
         r#"(version 1)
 (allow default)
 
-;; deny writes everywhere ...
-(deny file-write*)
+;; deny everywhere ...
+(deny file-write* file-link file-clone)
 
 ;; ...but allow them under explicit subpaths...
-(allow file-write*
+(allow file-write* file-link file-clone
     (subpath "{local}")
-    (subpath "{state}")
+    (subpath "{share}")
     (subpath "{config}")
+    (subpath "{state}")
+    (subpath "{uv_cache}")
+    (subpath "{cache}")
 {extra_rules}
 )
 "#,
         local = goose_local_dir,
-        state = goose_state_dir,
-        config = goose_config_dir,
+        share = goose_share_dir,
+        config = goose_config_home,
+        state = goose_state_dir_local,
+        uv_cache = uv_cache_dir,
+        cache = uv_cache_home,
         extra_rules = extra_rules,
     );
 
