@@ -4,6 +4,7 @@ pub mod execute_commands;
 pub mod extension;
 pub mod extension_malware_check;
 pub mod extension_manager;
+pub mod fides;
 pub mod final_output_tool;
 pub(crate) mod gen_ai_telemetry;
 mod large_response_handler;

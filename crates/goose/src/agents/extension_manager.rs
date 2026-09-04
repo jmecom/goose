@@ -200,6 +200,7 @@ pub struct ExtensionManager {
     tools_cache_version: AtomicU64,
     client_name: String,
     capabilities: ExtensionManagerCapabilities,
+    fides: Option<Arc<super::fides::FidesRuntime>>,
 }
 
 /// A flattened representation of a resource used by the agent to prepare inference
@@ -1399,7 +1400,14 @@ impl ExtensionManager {
             tools_cache_version: AtomicU64::new(0),
             client_name,
             capabilities,
+            fides: super::fides::FidesRuntime::configured(),
         }
+    }
+
+    pub fn with_fides(mut self, runtime: Arc<super::fides::FidesRuntime>) -> Self {
+        self.fides = Some(runtime);
+        *self.tools_cache.get_mut() = None;
+        self
     }
 
     pub fn new_without_provider(data_dir: std::path::PathBuf) -> Self {
@@ -2035,8 +2043,24 @@ impl ExtensionManager {
 
         let results = future::join_all(client_futures).await;
 
-        let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut tools = Vec::new();
+        let mut tools = if self.fides.is_some() {
+            goose_ifc::fides::security_tools()
+                .into_iter()
+                .map(|mut tool| {
+                    tool.meta = Some(MetaObject(
+                        serde_json::json!({TOOL_EXTENSION_META_KEY:"fides"})
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ));
+                    tool
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let mut seen_names: std::collections::HashSet<String> =
+            tools.iter().map(|tool| tool.name.to_string()).collect();
         for (ext_name, client_tools) in results {
             for tool in client_tools {
                 let tool_name = tool.name.to_string();
@@ -2367,6 +2391,85 @@ impl ExtensionManager {
     }
 
     pub async fn dispatch_tool_call(
+        &self,
+        ctx: &super::tool_execution::ToolCallContext,
+        mut tool_call: CallToolRequestParams,
+        cancellation_token: CancellationToken,
+    ) -> std::result::Result<ToolCallResult, ErrorData> {
+        use goose_ifc::fides::{
+            quarantined_call, security_error, INSPECT_VARIABLE, QUARANTINED_LLM,
+        };
+        let Some(runtime) = &self.fides else {
+            return self
+                .dispatch_tool_call_inner(ctx, tool_call, cancellation_token)
+                .await;
+        };
+        let tools = self
+            .get_all_tools_cached(&ctx.session_id)
+            .await
+            .map_err(|_| security_error())?;
+        let advertised = tools
+            .iter()
+            .map(|tool| (tool.name.as_ref(), get_tool_owner(tool)))
+            .collect::<Vec<_>>();
+        let recovered = recover_mangled_tool_name(
+            &tool_call.name,
+            advertised
+                .iter()
+                .map(|(name, owner)| (*name, owner.as_deref())),
+        );
+        if let Some(name) = recovered {
+            tool_call.name = name.into();
+        }
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == tool_call.name)
+            .ok_or_else(security_error)?;
+        let invocation = runtime.begin(&ctx.session_id, tool, &tool_call)?;
+        if invocation.blocked() {
+            return Err(security_error());
+        }
+        if invocation.name() == INSPECT_VARIABLE {
+            return Ok(ToolCallResult::from(runtime.inspect(invocation)));
+        }
+        if invocation.name() == QUARANTINED_LLM {
+            let provider = self.provider.lock().await.clone();
+            let config = self.context.model_config_for_session(&ctx.session_id).await;
+            let runtime = runtime.clone();
+            return Ok(ToolCallResult {
+                result: Box::new(async move {
+                    let result = match (provider, config) {
+                        (Some(provider), Ok(config)) => tokio::select! {
+                            _ = cancellation_token.cancelled() => Err(security_error()),
+                            result = quarantined_call(provider.as_ref(), &config, &invocation) => result,
+                        },
+                        _ => Err(security_error()),
+                    };
+                    runtime.finish_quarantine(invocation, result)
+                }.boxed()),
+                notification_stream: None,
+                action_required_stream: None,
+            });
+        }
+        tool_call.arguments = Some(invocation.arguments().clone());
+        let result = self
+            .dispatch_tool_call_inner(ctx, tool_call, cancellation_token)
+            .await;
+        let runtime = runtime.clone();
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => return Ok(ToolCallResult::from(runtime.finish(invocation, Err(error)))),
+        };
+        Ok(ToolCallResult {
+            result: Box::new(
+                async move { runtime.finish(invocation, result.result.await) }.boxed(),
+            ),
+            notification_stream: result.notification_stream,
+            action_required_stream: result.action_required_stream,
+        })
+    }
+
+    async fn dispatch_tool_call_inner(
         &self,
         ctx: &super::tool_execution::ToolCallContext,
         tool_call: CallToolRequestParams,

@@ -1,0 +1,19 @@
+{
+  "initial_label": {"integrity": "trusted", "confidentiality": "public"},
+  "auto_hide_untrusted": true,
+  "block_on_violation": false,
+  "tools": {
+    "fixture__read": {
+      "source_label": {"integrity": "untrusted", "confidentiality": "private"},
+      "accepts_untrusted": true,
+      "max_allowed_confidentiality": null,
+      "trust_result_labels": false
+    },
+    "fixture__publish": {
+      "source_label": {"integrity": "trusted", "confidentiality": "public"},
+      "accepts_untrusted": false,
+      "max_allowed_confidentiality": "public",
+      "trust_result_labels": false
+    }
+  }
+}

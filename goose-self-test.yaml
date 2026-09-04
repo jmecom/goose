@@ -15,6 +15,7 @@ activities:
   - Test delegate tool for task delegation (sync and async)
   - Test multi-turn thinking preservation for providers that reject replayed reasoning_content
   - Validate ACP thinking-effort discovery, forwarding, and provider switching
+  - Validate deterministic IFC label propagation and provider observation
   - Test error boundaries including nested delegation prevention
   - Generate comprehensive test report
 
@@ -23,7 +24,7 @@ parameters:
     input_type: string
     requirement: optional
     default: "all"
-    description: "Which test phases to run: all, basic, extensions, delegation, reasoning, acp-effort, advanced"
+    description: "Which test phases to run: all, basic, extensions, delegation, reasoning, acp-effort, ifc, advanced"
 
   - key: test_depth
     input_type: string
@@ -67,6 +68,22 @@ instructions: |
   - Handle errors gracefully - a test failure shouldn't stop the suite
 
   ## Test Execution Framework
+
+  ### IFC Labeling Experiment
+  For the `ifc` phase, run `./bin/cargo test -p goose-ifc`,
+  `./bin/cargo test -p goose --test fides`, and
+  `./bin/cargo run -p goose-ifc --example fides` from the repository root.
+  The FIDES demo should hide private results without tainting integrity, retain
+  private confidentiality, and taint integrity after explicit inspection. Policy
+  violations are logged by default. The Goose test uses both agent loops.
+  Also run `./bin/cargo run -p goose-ifc --example selective` for the older
+  reader-set comparison.
+  These tests use synthetic data and deterministic provider stubs. The older
+  reader-set demo should show shared work after private work, and a private result
+  when the private analysis enters the same context. Report test failures; do
+  not infer security from whether a model repeats a secret. Do not enable IFC
+  tracing on other sessions or use production data. If only `ifc` was requested,
+  stop after reporting these results.
 
   ### Phase 1: Environment Setup & Basic Tool Validation
   Create a structured test workspace and validate core developer tools:
