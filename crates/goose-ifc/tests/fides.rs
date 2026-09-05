@@ -83,20 +83,18 @@ fn microsoft_label_lattice_uses_two_independent_axes() {
             .map(move |confidentiality| ContentLabel {
                 integrity,
                 confidentiality,
+                ..Default::default()
             })
         })
         .collect::<Vec<_>>();
     for left in &labels {
-        assert_eq!(left.join(*left), *left);
+        assert_eq!(left.join(left), *left);
         for right in &labels {
-            assert_eq!(left.join(*right), right.join(*left));
-            assert!(left.join(*right).integrity >= left.integrity);
-            assert!(left.join(*right).confidentiality >= left.confidentiality);
+            assert_eq!(left.join(right), right.join(left));
+            assert!(left.join(right).integrity >= left.integrity);
+            assert!(left.join(right).confidentiality >= left.confidentiality);
             for third in &labels {
-                assert_eq!(
-                    left.join(*right).join(*third),
-                    left.join(right.join(*third))
-                );
+                assert_eq!(left.join(right).join(third), left.join(&right.join(third)));
             }
         }
     }
@@ -111,7 +109,8 @@ fn hidden_private_result_preserves_integrity_but_taints_confidentiality() {
         tracker.context_label("alice"),
         ContentLabel {
             integrity: Integrity::Trusted,
-            confidentiality: Confidentiality::Private
+            confidentiality: Confidentiality::Private,
+            ..Default::default()
         }
     );
     let invocation = tracker

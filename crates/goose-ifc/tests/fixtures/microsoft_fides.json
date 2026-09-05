@@ -1,0 +1,111 @@
+{
+  "upstream": {
+    "repository": "https://github.com/microsoft/agent-framework",
+    "commit": "2c49f50cf08ebb6c1687146336f039051f159333",
+    "test_file": "python/packages/core/tests/test_security.py"
+  },
+  "labels": {
+    "trusted_public": {"integrity": "trusted", "confidentiality": "public"},
+    "trusted_private": {"integrity": "trusted", "confidentiality": "private"},
+    "trusted_identity": {"integrity": "trusted", "confidentiality": "user_identity"},
+    "untrusted_public": {"integrity": "untrusted", "confidentiality": "public"},
+    "untrusted_private": {"integrity": "untrusted", "confidentiality": "private"},
+    "untrusted_identity": {"integrity": "untrusted", "confidentiality": "user_identity"},
+    "metadata_first": {"integrity": "trusted", "confidentiality": "public", "metadata": {"source": "first", "first": true}},
+    "metadata_second": {"integrity": "untrusted", "confidentiality": "private", "metadata": {"source": "second", "second": true}},
+    "metadata_combined": {"integrity": "untrusted", "confidentiality": "private", "metadata": {"source": "second", "first": true, "second": true}},
+    "metadata_empty": {"integrity": "trusted", "confidentiality": "public", "metadata": {}},
+    "metadata_null": {"integrity": "trusted", "confidentiality": "public", "metadata": null}
+  },
+  "label_cases": [
+    {"id": "default_join", "upstream_test": "TestCombineLabels.test_combine_empty", "operation": "join", "inputs": [], "expected": "trusted_public"},
+    {"id": "single_label", "upstream_test": "TestCombineLabels.test_combine_single", "operation": "join", "inputs": ["untrusted_private"], "expected": "untrusted_private"},
+    {"id": "integrity_join", "upstream_test": "TestCombineLabels.test_combine_most_restrictive_integrity", "operation": "join", "inputs": ["trusted_public", "untrusted_public", "trusted_public"], "expected": "untrusted_public"},
+    {"id": "confidentiality_join", "upstream_test": "TestCombineLabels.test_combine_most_restrictive_confidentiality", "operation": "join", "inputs": ["trusted_public", "trusted_identity", "trusted_private"], "expected": "trusted_identity"},
+    {"id": "metadata_merge", "upstream_test": "TestCombineLabels.test_combine_metadata_merged", "operation": "join", "inputs": ["metadata_first", "metadata_second"], "expected": "metadata_combined"},
+    {"id": "metadata_roundtrip", "upstream_test": "TestContentLabel.test_label_deserialization", "operation": "roundtrip", "inputs": ["metadata_first"], "expected": "metadata_first"},
+    {"id": "empty_metadata", "upstream_test": "TestContentLabel.test_label_serialization", "operation": "roundtrip", "inputs": ["metadata_empty"], "expected": "trusted_public"},
+    {"id": "null_metadata", "upstream_test": "TestContentLabel.test_create_label_defaults", "operation": "roundtrip", "inputs": ["metadata_null"], "expected": "trusted_public"}
+  ],
+  "result_cases": [
+    {
+      "id": "trusted_visible", "upstream_test": "TestLabelTrackingMiddleware.test_tool_with_trusted_source_labeled_trusted",
+      "fallback": "trusted_public", "initial": "trusted_public", "auto_hide": true,
+      "items": [{"text": "fixture public result"}],
+      "expected_labels": ["trusted_public"], "hidden": [false], "context": "trusted_public"
+    },
+    {
+      "id": "hidden_private", "upstream_test": "TestPerItemEmbeddedLabels.test_hidden_untrusted_items_do_not_taint_integrity_in_mixed_results",
+      "fallback": "untrusted_private", "initial": "trusted_public", "auto_hide": true,
+      "items": [{"text": "fixture restricted result"}],
+      "expected_labels": ["untrusted_private"], "hidden": [true], "context": "trusted_private"
+    },
+    {
+      "id": "mixed_items", "upstream_test": "TestPerItemEmbeddedLabels.test_mixed_trust_items_in_list",
+      "fallback": "untrusted_public", "initial": "trusted_public", "auto_hide": true,
+      "items": [{"text": "fixture public result", "label": "trusted_public"}, {"text": "fixture restricted result", "label": "untrusted_private"}],
+      "expected_labels": ["trusted_public", "untrusted_private"], "hidden": [false, true], "context": "trusted_private"
+    },
+    {
+      "id": "public_overrides_private_fallback", "upstream_test": "TestTieredLabelPropagation.test_embedded_labels_override_source_integrity",
+      "extension": "Exercise the same precedence with a private fallback and exclusively public items.",
+      "fallback": "untrusted_private", "initial": "trusted_public", "auto_hide": true,
+      "items": [{"text": "fixture public result", "label": "trusted_public"}],
+      "expected_labels": ["trusted_public"], "hidden": [false], "context": "trusted_public"
+    },
+    {
+      "id": "missing_label_uses_fallback", "upstream_test": "TestPerItemEmbeddedLabels.test_items_without_labels_use_fallback",
+      "fallback": "untrusted_private", "initial": "trusted_public", "auto_hide": true,
+      "items": [{"text": "fixture public result", "label": "trusted_public"}, {"text": "fixture unspecified result"}],
+      "expected_labels": ["trusted_public", "untrusted_private"], "hidden": [false, true], "context": "trusted_private"
+    },
+    {
+      "id": "visible_metadata", "upstream_test": "TestPerItemEmbeddedLabels.test_mixed_trust_items_in_list",
+      "extension": "Retain non-label content properties and explicitly supplied label metadata.",
+      "fallback": "untrusted_public", "initial": "trusted_public", "auto_hide": true,
+      "items": [{"text": "fixture public result", "label": "metadata_first", "metadata": {"presentation": {"format": "plain"}}}],
+      "expected_labels": ["metadata_first"], "hidden": [false], "context": "trusted_public"
+    },
+    {
+      "id": "hiding_disabled", "upstream_test": "TestPerItemEmbeddedLabels.test_mixed_trust_items_in_list",
+      "extension": "Run with auto-hide disabled.",
+      "fallback": "untrusted_private", "initial": "trusted_public", "auto_hide": false,
+      "items": [{"text": "fixture restricted result"}],
+      "expected_labels": ["untrusted_private"], "hidden": [false], "context": "untrusted_private"
+    },
+    {
+      "id": "already_untrusted", "upstream_test": "TestPerItemEmbeddedLabels.test_mixed_trust_items_in_list",
+      "extension": "Start with an untrusted context, where hiding no longer applies.",
+      "fallback": "untrusted_private", "initial": "untrusted_public", "auto_hide": true,
+      "items": [{"text": "fixture restricted result"}],
+      "expected_labels": ["untrusted_private"], "hidden": [false], "context": "untrusted_private"
+    },
+    {
+      "id": "context_never_downgrades", "upstream_test": "TestPerItemEmbeddedLabels.test_mixed_trust_items_in_list",
+      "extension": "Start private and untrusted, then receive public trusted content.",
+      "fallback": "trusted_public", "initial": "untrusted_private", "auto_hide": true,
+      "items": [{"text": "fixture public result"}],
+      "expected_labels": ["trusted_public"], "hidden": [false], "context": "untrusted_private"
+    },
+    {
+      "id": "empty_result", "upstream_test": "TestPerItemEmbeddedLabels.test_items_without_labels_use_fallback",
+      "extension": "An empty result retains fallback confidentiality without exposing integrity.",
+      "fallback": "untrusted_private", "initial": "trusted_public", "auto_hide": true,
+      "items": [], "expected_labels": [], "hidden": [], "context": "trusted_private"
+    }
+  ],
+  "annotation_cases": [
+    {"id": "missing_hints", "upstream_test": "TestMCPAnnotationMapping", "annotations": null, "integrity": "untrusted", "maximum": "public", "accepts_untrusted": false},
+    {"id": "read_only", "upstream_test": "TestMCPAnnotationMapping", "annotations": {"readOnlyHint": true}, "integrity": "untrusted", "maximum": null, "accepts_untrusted": true},
+    {"id": "closed_world_read", "upstream_test": "TestMCPAnnotationMapping", "annotations": {"readOnlyHint": true, "openWorldHint": false}, "integrity": "trusted", "maximum": null, "accepts_untrusted": true},
+    {"id": "closed_world_write", "upstream_test": "TestMCPAnnotationMapping", "annotations": {"readOnlyHint": false, "openWorldHint": false}, "integrity": "trusted", "maximum": "public", "accepts_untrusted": false}
+  ],
+  "policy_cases": [
+    {"id": "trusted_public_allowed", "upstream_test": "TestPolicyEnforcementMiddleware", "label": "trusted_public", "accepts_untrusted": false, "maximum": "public", "block": true, "blocked": false},
+    {"id": "untrusted_blocked", "upstream_test": "TestPolicyEnforcementMiddleware", "label": "untrusted_public", "accepts_untrusted": false, "maximum": "public", "block": true, "blocked": true},
+    {"id": "private_blocked", "upstream_test": "TestPolicyEnforcementMiddleware", "label": "trusted_private", "accepts_untrusted": false, "maximum": "public", "block": true, "blocked": true},
+    {"id": "identity_above_private", "upstream_test": "TestPolicyEnforcementMiddleware", "label": "trusted_identity", "accepts_untrusted": true, "maximum": "private", "block": true, "blocked": true},
+    {"id": "read_allowed", "upstream_test": "TestPolicyEnforcementMiddleware", "label": "untrusted_private", "accepts_untrusted": true, "maximum": null, "block": true, "blocked": false},
+    {"id": "log_only", "upstream_test": "TestPolicyEnforcementMiddleware", "label": "untrusted_private", "accepts_untrusted": false, "maximum": "public", "block": false, "blocked": false}
+  ]
+}

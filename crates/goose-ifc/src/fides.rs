@@ -33,18 +33,44 @@ pub enum Confidentiality {
     UserIdentity,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContentLabel {
     pub integrity: Integrity,
     pub confidentiality: Confidentiality,
+    #[serde(
+        default,
+        skip_serializing_if = "serde_json::Map::is_empty",
+        deserialize_with = "deserialize_label_metadata"
+    )]
+    pub metadata: serde_json::Map<String, Value>,
+}
+
+fn deserialize_label_metadata<'de, Deserializer>(
+    deserializer: Deserializer,
+) -> Result<serde_json::Map<String, Value>, Deserializer::Error>
+where
+    Deserializer: serde::Deserializer<'de>,
+{
+    Ok(Option::<serde_json::Map<String, Value>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 impl ContentLabel {
-    pub fn join(self, other: Self) -> Self {
+    pub fn join(&self, other: &Self) -> Self {
+        let mut metadata = self.metadata.clone();
+        metadata.extend(other.metadata.clone());
         Self {
             integrity: self.integrity.max(other.integrity),
             confidentiality: self.confidentiality.max(other.confidentiality),
+            metadata,
+        }
+    }
+
+    fn classification(&self) -> Self {
+        Self {
+            integrity: self.integrity,
+            confidentiality: self.confidentiality,
+            metadata: Default::default(),
         }
     }
 
@@ -52,6 +78,7 @@ impl ContentLabel {
         Self {
             integrity: Integrity::Untrusted,
             confidentiality,
+            metadata: Default::default(),
         }
     }
 }
@@ -89,6 +116,7 @@ impl ToolPolicy {
                     Integrity::Untrusted
                 },
                 confidentiality: Confidentiality::Public,
+                metadata: Default::default(),
             },
             accepts_untrusted: read_only,
             max_allowed_confidentiality: (!read_only).then_some(Confidentiality::Public),
@@ -151,7 +179,7 @@ impl ToolInvocation {
         &self.name
     }
     pub fn label(&self) -> ContentLabel {
-        self.label
+        self.label.clone()
     }
 
     pub fn quarantine_prompt(&self) -> Value {
@@ -225,8 +253,8 @@ impl LabelTracker {
     pub fn context_label(&self, session_id: &str) -> ContentLabel {
         self.sessions
             .get(session_id)
-            .map(|session| session.label)
-            .unwrap_or(self.config.initial_label)
+            .map(|session| session.label.clone())
+            .unwrap_or_else(|| self.config.initial_label.clone())
     }
 
     pub fn log_failed(&self) -> bool {
@@ -258,7 +286,7 @@ impl LabelTracker {
             .entry(session_id.to_owned())
             .or_insert_with(|| Session {
                 trace_id: Uuid::new_v4().to_string(),
-                label: self.config.initial_label,
+                label: self.config.initial_label.clone(),
                 variables: HashMap::new(),
                 stored_bytes: 0,
             });
@@ -269,7 +297,7 @@ impl LabelTracker {
             .cloned()
             .unwrap_or_else(|| ToolPolicy::from_tool(tool));
         let mut arguments = call.arguments.clone().unwrap_or_default();
-        let mut label = session.label;
+        let mut label = session.label.clone();
         let mut variables = Vec::new();
         let mut input_refs = Vec::new();
         let internal = matches!(call.name.as_ref(), INSPECT_VARIABLE | QUARANTINED_LLM);
@@ -312,7 +340,7 @@ impl LabelTracker {
                     .variables
                     .get(reference)
                     .ok_or_else(security_error)?;
-                label = label.join(variable.label);
+                label = label.join(&variable.label);
                 variables.push(variable.payload.clone());
                 input_refs.push(reference.to_owned());
             }
@@ -335,14 +363,14 @@ impl LabelTracker {
             session_id: session_id.to_owned(),
             name: call.name.to_string(),
             arguments,
-            label,
+            label: label.clone(),
             policy,
             variables,
             blocked: !allowed && self.config.block_on_violation,
         };
         let event = json!({"version":1,"event":"tool_call","session":session.trace_id,"invocation":invocation.id,
             "tool_digest":content_digest(&call.name),"arguments_digest":content_digest(&invocation.arguments),
-            "label":label,"input_refs":input_refs,"would_allow":allowed,"blocked":invocation.blocked,
+            "label":label.classification(),"input_refs":input_refs,"would_allow":allowed,"blocked":invocation.blocked,
             "integrity_violation":integrity_violation,"confidentiality_violation":confidentiality_violation});
         self.emit(event);
         Ok(invocation)
@@ -374,7 +402,7 @@ impl LabelTracker {
                 .variables
                 .get(reference)
                 .ok_or_else(security_error)?;
-            *label = label.join(variable.label);
+            *label = label.join(&variable.label);
             input_refs.push(reference.to_owned());
             *value = variable.payload.clone();
         } else {
@@ -406,7 +434,7 @@ impl LabelTracker {
                 .map(str::to_owned)
                 .unwrap_or_else(|| payload.to_string()),
         )]);
-        let label = invocation.label;
+        let label = invocation.label.clone();
         self.finish_labeled(invocation, Ok(result), Some(label))
     }
 
@@ -415,7 +443,8 @@ impl LabelTracker {
         invocation: ToolInvocation,
         result: Result<CallToolResult, ErrorData>,
     ) -> Result<CallToolResult, ErrorData> {
-        let label = ContentLabel::untrusted(invocation.label.confidentiality);
+        let mut label = invocation.label.clone();
+        label.integrity = Integrity::Untrusted;
         self.finish_labeled(invocation, result, Some(label))
     }
 
@@ -440,9 +469,11 @@ impl LabelTracker {
         let result = result.unwrap_or_else(|_| {
             CallToolResult::error(vec![ContentBlock::text("FIDES tool execution failed")])
         });
-        let fallback = override_label.unwrap_or(invocation.policy.source_label);
+        let fallback = override_label
+            .clone()
+            .unwrap_or_else(|| invocation.policy.source_label.clone());
         let fallback = if failed || result.is_error == Some(true) {
-            fallback.join(ContentLabel::untrusted(invocation.label.confidentiality))
+            fallback.join(&ContentLabel::untrusted(invocation.label.confidentiality))
         } else {
             fallback
         };
@@ -458,23 +489,33 @@ impl LabelTracker {
         for item in result.content {
             let encoded = serde_json::to_value(&item).map_err(|_| security_error())?;
             let label = if invocation.policy.trust_result_labels && override_label.is_none() {
-                Self::metadata_label(encoded.get("_meta").and_then(Value::as_object), root_label)
+                Self::metadata_label(
+                    encoded.get("_meta").and_then(Value::as_object),
+                    root_label.clone(),
+                )
             } else {
-                root_label
+                root_label.clone()
             };
             let payload = item
                 .as_text()
                 .map(|text| Value::String(text.text.clone()))
                 .unwrap_or_else(|| encoded.clone());
-            let (visible, hidden) = self.present(&invocation, payload, label)?;
+            let (visible, hidden) = self.present(&invocation, payload, &label)?;
             if hidden {
                 output.content.push(ContentBlock::text(visible.to_string()));
             } else {
                 let mut encoded = encoded;
-                encoded
+                let metadata = encoded
                     .as_object_mut()
                     .ok_or_else(security_error)?
-                    .insert("_meta".into(), json!({"goose.fides.label":label}));
+                    .entry("_meta")
+                    .or_insert_with(|| json!({}))
+                    .as_object_mut()
+                    .ok_or_else(security_error)?;
+                metadata.remove("security_label");
+                metadata.remove("ifc");
+                metadata.remove("goose.fides.context");
+                metadata.insert("goose.fides.label".into(), json!(label));
                 output
                     .content
                     .push(serde_json::from_value(encoded).map_err(|_| security_error())?);
@@ -482,19 +523,37 @@ impl LabelTracker {
             labels.push((label, hidden));
         }
         if let Some(structured) = result.structured_content {
-            let (visible, hidden) = self.present(&invocation, structured, root_label)?;
+            let (visible, hidden) = self.present(&invocation, structured, &root_label)?;
             output.structured_content = Some(visible);
-            labels.push((root_label, hidden));
+            labels.push((root_label.clone(), hidden));
+        }
+        let mut metadata = result.meta.map(|meta| meta.0).unwrap_or_default();
+        for key in [
+            "security_label",
+            "ifc",
+            "goose.fides.context",
+            "goose.fides.label",
+        ] {
+            metadata.remove(key);
+        }
+        if !metadata.is_empty() {
+            let (_, hidden) = self.present(&invocation, json!(metadata), &root_label)?;
+            if !hidden {
+                output.meta = Some(MetaObject(metadata));
+            }
+            labels.push((root_label.clone(), hidden));
         }
         let session = self
             .sessions
             .get_mut(&invocation.session_id)
             .ok_or_else(security_error)?;
-        let before = session.label;
-        session.label.confidentiality = session
-            .label
-            .confidentiality
-            .max(root_label.confidentiality);
+        let before = session.label.classification();
+        if labels.is_empty() {
+            session.label.confidentiality = session
+                .label
+                .confidentiality
+                .max(root_label.confidentiality);
+        }
         for (label, hidden) in labels {
             session.label.confidentiality =
                 session.label.confidentiality.max(label.confidentiality);
@@ -503,16 +562,18 @@ impl LabelTracker {
             }
         }
         if failed {
-            session.label = session.label.join(root_label);
+            session.label = session.label.join(&root_label.classification());
         }
-        output.meta = Some(MetaObject(
-            json!({"goose.fides.context":session.label})
-                .as_object()
-                .unwrap()
-                .clone(),
-        ));
+        output
+            .meta
+            .get_or_insert_with(|| MetaObject(Default::default()))
+            .0
+            .insert(
+                "goose.fides.context".into(),
+                json!(session.label.classification()),
+            );
         let event = json!({"version":1,"event":"tool_result","session":session.trace_id,"invocation":invocation.id,
-            "context_before":before,"context_after":session.label,"error":output.is_error == Some(true)});
+            "context_before":before,"context_after":session.label.classification(),"error":output.is_error == Some(true)});
         self.emit(event);
         Ok(output)
     }
@@ -535,7 +596,7 @@ impl LabelTracker {
         &mut self,
         invocation: &ToolInvocation,
         payload: Value,
-        label: ContentLabel,
+        label: &ContentLabel,
     ) -> Result<(Value, bool), ErrorData> {
         let session = self
             .sessions
@@ -548,23 +609,31 @@ impl LabelTracker {
         let reference = format!("var_{}", Uuid::new_v4());
         let digest = content_digest(&payload);
         let visible = if hidden {
-            let bytes = payload.to_string().len();
+            let bytes = payload.to_string().len().saturating_add(
+                serde_json::to_vec(label)
+                    .map_err(|_| security_error())?
+                    .len(),
+            );
             if session.variables.len() >= MAX_VARIABLES
                 || bytes > MAX_STORED_BYTES.saturating_sub(session.stored_bytes)
             {
-                session.label = session.label.join(label);
+                session.label = session.label.join(&label.classification());
                 return Err(security_error());
             }
             session.stored_bytes += bytes;
-            session
-                .variables
-                .insert(reference.clone(), StoredVariable { payload, label });
-            json!({"type":"variable_reference","variable_id":reference,"security_label":label})
+            session.variables.insert(
+                reference.clone(),
+                StoredVariable {
+                    payload,
+                    label: label.clone(),
+                },
+            );
+            json!({"type":"variable_reference","variable_id":reference,"security_label":label.classification()})
         } else {
             payload
         };
         let event = json!({"version":1,"event":"value","session":session.trace_id,"invocation":invocation.id,
-            "value_ref":reference,"label":label,"hidden":hidden,"content_digest":digest});
+            "value_ref":reference,"label":label.classification(),"hidden":hidden,"content_digest":digest});
         self.emit(event);
         Ok((visible, hidden))
     }

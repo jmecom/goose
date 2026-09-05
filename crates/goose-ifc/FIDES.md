@@ -94,6 +94,12 @@ text or model-authored call arguments have no authority. Malformed explicit
 labels become untrusted/user_identity. Reader-list and JSONPath wire formats
 are not supported by this adapter.
 
+Labels retain Microsoft's optional `metadata` object. Joining labels merges those
+objects with later keys winning; metadata never grants authority or changes the
+two classification axes. Empty or null metadata is omitted when serialized.
+Unlike Microsoft's general label deserializer, both classification fields remain
+required and unknown fields remain errors.
+
 Hidden variables belong to one session in this process. Knowing another
 session's reference does not permit retrieval. `fides__inspect_variable` and
 `fides__quarantined_llm` take the IDs returned by the middleware. Ordinary tool
@@ -101,11 +107,54 @@ arguments can forward a variable using `{"$fides_variable":"var_..."}` or a
 whole string `[var_...]`; the middleware resolves and checks it before dispatch.
 It does not interpolate references embedded inside larger strings.
 
-Raw result metadata is not forwarded; visible items receive host-written label
-metadata instead. Structured results are processed separately so a hidden text
-result is not accidentally exposed through its structured duplicate. A session
-stores at most 1024 variables and 16 MiB of variable payloads. Capacity failures
-return a fixed error and retain the restrictive label.
+Visible items retain their non-label metadata and receive host-written label
+metadata. Hidden placeholders and traces contain only classification axes, not
+arbitrary label metadata; stored labels retain that metadata for inspection.
+This redaction is an intentional difference from Microsoft's placeholders.
+
+Per-item labels override the root/tool fallback. An unused private fallback does
+not make exclusively public items private. Structured content and non-label
+result metadata are separate values with the root label, so they still contribute
+when present. An empty result retains fallback confidentiality. Visible result
+metadata keeps Goose's host-validated MCP App attachments; hidden metadata is
+stored but not returned. Server-supplied label/context claims are replaced, and
+Goose still removes forged app attachments before adding its own.
+
+A session stores at most 1024 variables and 16 MiB of payloads plus label metadata.
+Capacity failures return a fixed error and retain the restrictive classification.
+
+## Compatibility tests
+
+`tests/fixtures/microsoft_fides.json` contains 28 shared cases for label
+serialization and joins, result labeling and hiding, MCP annotations, and policy
+decisions. Each identifies its upstream test or test class. Cases extending an
+upstream scenario also explain the extension. Rust consumes the JSON in
+`tests/fides_compatibility.rs`; `tests/verify_microsoft_fides.py` consumes the same
+cases using the actual pinned Python classes. The Python runner checks the commit,
+requires unchanged tracked core files, and verifies the upstream test names.
+
+Run the Rust cases with `./bin/cargo test -p goose-ifc --test fides_compatibility`.
+For Python, use a separate checkout of Microsoft Agent Framework at the commit
+linked above and an isolated environment with its core package installed:
+
+```sh
+upstream=/absolute/path/to/pinned-agent-framework
+uv venv /tmp/fides-compatibility-venv
+uv pip install --python /tmp/fides-compatibility-venv/bin/python "$upstream/python/packages/core"
+/tmp/fides-compatibility-venv/bin/python \
+  crates/goose-ifc/tests/verify_microsoft_fides.py "$upstream"
+```
+
+The shared assertions compare classifications, visible text, explicit label
+metadata, retained content properties, hidden status, and policy decisions. They
+ignore generated handles and Python's automatically added fallback provenance.
+They do not claim wire-format equivalence, full upstream-suite coverage, approval
+parity, or equivalent real-model task completion. Both implementations pass these
+28 cases at the pinned commit. No model or external tool is called by either runner.
+
+Goose-specific regressions additionally cover hidden metadata, structured content,
+root labels, and host-owned attachments. The integration test runs metadata
+delivery and a subsequent permitted mock publication through both agent loops.
 
 ## What this does not establish
 

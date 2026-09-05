@@ -76,6 +76,12 @@ instructions: |
   The FIDES demo should hide private results without tainting integrity, retain
   private confidentiality, and taint integrity after explicit inspection. Policy
   violations are logged by default. The Goose test uses both agent loops.
+  The crate tests include shared compatibility fixtures translated from pinned
+  Microsoft tests. The Goose tests also verify visible metadata, host-validated
+  MCP App attachments, and public item overrides followed by a permitted mock
+  publication. If a clean pinned Microsoft checkout is available, run the Python
+  fixture verifier as described in `crates/goose-ifc/FIDES.md`; otherwise report
+  that comparison as not run rather than claiming parity from Rust tests alone.
   Also run `./bin/cargo run -p goose-ifc --example selective` for the older
   reader-set comparison.
   These tests use synthetic data and deterministic provider stubs. The older
